@@ -4,7 +4,6 @@ import signal
 import socket
 import threading
 import time
-
 import psutil
 import serial
 from PIL import Image, ImageDraw, ImageFont
@@ -12,9 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from framebuffer import FrameBuffer
 
 SYNC_BYTES = b"\xA5\x5A"
-
 RETRY_INTERVAL = 5
-
 
 def open_serial(port, baudrate, timeout=1):
     while True:

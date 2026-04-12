@@ -2,16 +2,60 @@
 import argparse
 import signal
 import socket
+import subprocess
 import threading
 import time
 import psutil
 import serial
 from PIL import Image, ImageDraw, ImageFont
-
 from framebuffer import FrameBuffer
+from historybuffer import HistoryBuffer
+
+
 
 SYNC_BYTES = b"\xA5\x5A"
 RETRY_INTERVAL = 5
+
+hb_cpu_usage = HistoryBuffer(48)
+hb_cpu_temperature = HistoryBuffer(48)
+frames=0
+cpu_a=0
+cpu_temp_a=0
+
+def render_plot(history, height):
+    width=history.get_maxlen()
+    samples=history.get_history()
+
+    if not samples:
+        return Image.new('1', (width, height), 1)
+    
+    # Reverse history so newest is at x=0
+    reversed_history = list(reversed(samples))
+    
+    # If more than width, take the newest width samples
+    if len(reversed_history) > width:
+        plot_data = reversed_history[:width]
+    else:
+        plot_data = reversed_history
+    
+    img = Image.new('1', (width, height), 1)
+    draw = ImageDraw.Draw(img)
+    
+    if not plot_data:
+        return img
+    
+    min_val = 0
+    max_val = 100
+
+    points = []
+    for x, val in enumerate(plot_data):
+        y = height - 1 - int((val - min_val) / (max_val - min_val) * (height - 1))
+        points.append((x, y))
+    
+    if len(points) > 1:
+        draw.line(points, fill=0)
+    
+    return img
 
 def open_serial(port, baudrate, timeout=1):
     while True:
@@ -25,12 +69,10 @@ def open_serial(port, baudrate, timeout=1):
             print(f"Cannot open {port}: {e}. Retrying in {RETRY_INTERVAL}s...")
             time.sleep(RETRY_INTERVAL)
 
-
 def send_frame(ser, frame_bytes):
     ser.write(SYNC_BYTES)
     ser.write(frame_bytes)
     ser.flush()
-
 
 def get_ip():
     try:
@@ -40,7 +82,6 @@ def get_ip():
     except Exception:
         return "N/A"
 
-
 def has_internet(host="8.8.8.8", port=53, timeout=2):
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -48,49 +89,86 @@ def has_internet(host="8.8.8.8", port=53, timeout=2):
     except OSError:
         return False
 
+def get_cpu_temperature():
+    try:
+        result = subprocess.run(['sensors'], capture_output=True, text=True, timeout=5)
+        lines = result.stdout.split('\n')
+        for line in lines:
+            if 'Package id 0:' in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    temp_str = parts[3]
+                    if temp_str.endswith('°C'):
+                        return int(float(temp_str[:-2]))
+    except Exception:
+        return None
 
 def render(frame):
+    global hb_cpu_usage
+    global hb_cpu_temperature
+    global frames, cpu_temp_a, cpu_a
     cpu = psutil.cpu_percent(interval=None)
+    cpu_temp=get_cpu_temperature()
     mem = psutil.virtual_memory()
     uptime_s = int(time.time() - psutil.boot_time())
     uptime = f"{uptime_s // 3600}h{(uptime_s % 3600) // 60:02d}m"
     ip = get_ip()
     internet = "UP" if has_internet() else "DOWN"
-    ram_used = mem.used // (1024 * 1024)
-    ram_total = mem.total // (1024 * 1024)
-    disk = psutil.disk_usage("/").percent
+    ram_used = mem.used / (1024 * 1024 * 1024)
+    ram_total = mem.total / (1024 * 1024 *1024)
+    nvme_usage = psutil.disk_usage("/").percent
+    hdd_usage = psutil.disk_usage("/mnt/satadisk").percent
 
+    
     #20 colums, 6 lines
     titles = [
-        "IP",
         "Internet",
         "CPU",
         "RAM",
-        "Disk /",
-        "Uptime"
+        "SSD",
+        "HDD",
+        "UP"
     ]
 
     #20 colums, 6 lines
+    space_from_left=13
     values = [
-        (ip).rjust(21),
-        internet.rjust(21),
-        (f"{cpu:.1f}%").rjust(21),
-        (f"{ram_used}/{ram_total}MB").rjust(21),
-        (f"{disk:.1f}%").rjust(21),
-        (uptime).rjust(21),
+        internet.rjust(space_from_left),
+        (f"{cpu_temp}°C/{int(cpu)}%").rjust(space_from_left),
+        (f"{ram_used:.1f}/{ram_total:.1f}GB").rjust(space_from_left),
+        (f"{nvme_usage:.1f}%").rjust(space_from_left),
+        (f"{hdd_usage:.1f}%").rjust(space_from_left),
+        (uptime).rjust(space_from_left),
     ]
 
 
     frame.clear()
-    image = Image.new("1", (frame.width, frame.height), 1)
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype("/home/diglo/.local/share/fonts/CozetteVector.ttf", 12, encoding="unic")
+    lcd_image = Image.new("1", (frame.width, frame.height), 1)
+    draw = ImageDraw.Draw(lcd_image)
+    font = ImageFont.truetype("CozetteVector.ttf", 12, encoding="unic")
     for i, line in enumerate(titles):
         draw.text((0, i * 10), line, font=font, fill=0)
     for i, line in enumerate(values):
         draw.text((0, i * 10), line, font=font, fill=0)
-    frame.from_pil_image(image)
 
+    cpu_a += cpu/10
+    cpu_temp_a += cpu_temp/10
+
+    frames += 1
+    if (frames%10)==0:
+        hb_cpu_usage.add_sample(cpu_a)
+        hb_cpu_temperature.add_sample(cpu_temp_a)
+        cpu_a=0
+        cpu_temp_a=0
+        frames=0
+
+    img_cpu_plot_img=render_plot(hb_cpu_usage, height=20)
+    img_temp_plot_img=render_plot(hb_cpu_temperature, height=20)
+
+    lcd_image.paste(img_cpu_plot_img, (128-48, 0))
+    lcd_image.paste(img_temp_plot_img, (128-48, 30))
+
+    frame.from_pil_image(lcd_image)
 
 def main():
     parser = argparse.ArgumentParser(description="Draw and stream a 128x64x1bpp framebuffer over serial.")

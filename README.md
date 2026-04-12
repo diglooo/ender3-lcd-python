@@ -2,7 +2,7 @@
 
 Repurpose the Ender 3 LCD (ST7920 128x64) as a general-purpose system info display, driven by a host computer over USB serial.
 
-![Display showing system info](media/20260409_000310.jpeg)
+![Display showing system info](media/20260412_233209.jpeg)
 
 ## Architecture
 
@@ -11,6 +11,7 @@ Host (Python) ──USB Serial──> ATmega328P ──SPI──> ST7920 128x64 
 ```
 
 The host renders a 1bpp framebuffer and streams it to the microcontroller, which forwards it to the display. The two communicate at 115200 baud using a simple sync-word framing protocol.
+Frames are sent every second. The script retries the serial connection automatically if the device is unplugged, and handles `SIGTERM` for use as a systemd service.
 
 ## Protocol
 
@@ -26,12 +27,6 @@ Runs on an **ATmega328P** (Arduino Nano), built with PlatformIO.
 
 **Dependencies:** [U8g2](https://github.com/olikraus/u8g2) (`olikraus/U8g2`)
 
-### Build & Flash
-
-```bash
-pio run --target upload
-```
-
 ## Python (`python/`)
 
 Runs on the host. Renders system info using Pillow and streams frames over serial.
@@ -39,43 +34,10 @@ Runs on the host. Renders system info using Pillow and streams frames over seria
 **Files:**
 - `main.py` — main loop, serial handling, system info rendering
 - `framebuffer.py` — `FrameBuffer` class for 1bpp pixel manipulation
-
-**Dependencies:**
-
-```bash
-pip install pyserial pillow psutil
-```
+- `historybuffer.py` — `HistoryBuffer` wrapper class for plot data
 
 ### Usage
 
 ```bash
-python python/main.py --port /dev/ttyUSB0
-```
-
-The script displays:
-
-| Field    | Description              |
-|----------|--------------------------|
-| IP       | Local IP address         |
-| Internet | Connectivity check       |
-| CPU      | CPU usage %              |
-| RAM      | Used / total RAM in MB   |
-| Disk /   | Root filesystem usage %  |
-| Uptime   | System uptime            |
-
-Frames are sent every second. The script retries the serial connection automatically if the device is unplugged, and handles `SIGTERM` cleanly for use as a systemd service.
-
-### Running as a systemd service
-
-```ini
-[Unit]
-Description=Ender3 LCD display daemon
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /path/to/python/main.py --port /dev/ttyUSB0
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
+python3 python/main.py --port /dev/ttyUSB0
 ```

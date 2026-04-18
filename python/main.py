@@ -10,8 +10,7 @@ import serial
 from PIL import Image, ImageDraw, ImageFont
 from framebuffer import FrameBuffer
 from historybuffer import HistoryBuffer
-
-
+from UPSC import run_upsc, UPSC
 
 SYNC_BYTES = b"\xA5\x5A"
 RETRY_INTERVAL = 5
@@ -107,22 +106,37 @@ def render(frame):
     global hb_cpu_usage
     global hb_cpu_temperature
     global frames, cpu_temp_a, cpu_a
+
+    ups = UPSC.from_system()
+    upsstr=f"{ups.ups_status} {ups.battery_runtime//60}m"
     cpu = psutil.cpu_percent(interval=None)
+    
     cpu_temp=get_cpu_temperature()
+    
     mem = psutil.virtual_memory()
+    
     uptime_s = int(time.time() - psutil.boot_time())
-    uptime = f"{uptime_s // 3600}h{(uptime_s % 3600) // 60:02d}m"
+    days = uptime_s // 86400
+    hours = (uptime_s % 86400) // 3600
+    minutes = (uptime_s % 3600) // 60
+    uptime = f"{days}d{hours}h{minutes}m"
+
     ip = get_ip()
+    
     internet = "UP" if has_internet() else "DOWN"
+    
     ram_used = mem.used / (1024 * 1024 * 1024)
+    
     ram_total = mem.total / (1024 * 1024 *1024)
+    
     nvme_usage = psutil.disk_usage("/").percent
+    
     hdd_usage = psutil.disk_usage("/mnt/satadisk").percent
 
     
     #20 colums, 6 lines
     titles = [
-        "Internet",
+        "",
         "CPU",
         "RAM",
         "SSD",
@@ -133,7 +147,7 @@ def render(frame):
     #20 colums, 6 lines
     space_from_left=13
     values = [
-        internet.rjust(space_from_left),
+        upsstr.rjust(space_from_left),
         (f"{cpu_temp}°C/{int(cpu)}%").rjust(space_from_left),
         (f"{ram_used:.1f}/{ram_total:.1f}GB").rjust(space_from_left),
         (f"{nvme_usage:.1f}%").rjust(space_from_left),

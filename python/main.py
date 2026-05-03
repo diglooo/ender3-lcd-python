@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from framebuffer import FrameBuffer
 from historybuffer import HistoryBuffer
 from UPSC import run_upsc, UPSC
+from apc_monitor import APCMonitor
 
 SYNC_BYTES = b"\xA5\x5A"
 RETRY_INTERVAL = 5
@@ -20,6 +21,7 @@ hb_cpu_temperature = HistoryBuffer(48)
 frames=0
 cpu_a=0
 cpu_temp_a=0
+apc_monitor = None
 
 def render_plot(history, height):
     width=history.get_maxlen()
@@ -106,9 +108,22 @@ def render(frame):
     global hb_cpu_usage
     global hb_cpu_temperature
     global frames, cpu_temp_a, cpu_a
+    global apc_monitor
 
-    ups = UPSC.from_system()
-    upsstr=f"{ups.ups_status} {ups.battery_runtime//60}m"
+    # Get UPS data from APCMonitor
+    upsstr = "--"
+    if apc_monitor:
+        status = apc_monitor.get('STATUS', "UNKNOWN")
+        loadpct = apc_monitor.get('LOADPCT', 0)
+        timeleft = apc_monitor.get('TIMELEFT', 0)
+        #print(f"APC STATUS: {status}, TIMELEFT: {timeleft}, LOADPCT: {loadpct}")
+        if status and timeleft:
+            loadpct = loadpct.split()[0] 
+            timeleft = timeleft.split()[0]
+            upsstr = f"{status} {int(float(timeleft))}min {int(float(loadpct))}W"
+        else:
+            upsstr = "UPS Error"
+
     cpu = psutil.cpu_percent(interval=None)
     
     cpu_temp=get_cpu_temperature()
@@ -122,17 +137,11 @@ def render(frame):
     uptime = f"{days}d{hours}h{minutes}m"
 
     ip = get_ip()
-    
     internet = "UP" if has_internet() else "DOWN"
-    
-    ram_used = mem.used / (1024 * 1024 * 1024)
-    
-    ram_total = mem.total / (1024 * 1024 *1024)
-    
-    nvme_usage = psutil.disk_usage("/").percent
-    
+    ram_used = mem.used / (1024 * 1024 * 1024)    
+    ram_total = mem.total / (1024 * 1024 *1024)    
+    nvme_usage = psutil.disk_usage("/").percent    
     hdd_usage = psutil.disk_usage("/mnt/satadisk").percent
-
     
     #20 colums, 6 lines
     titles = [
@@ -147,7 +156,7 @@ def render(frame):
     #20 colums, 6 lines
     space_from_left=13
     values = [
-        upsstr.rjust(space_from_left),
+        (upsstr),
         (f"{cpu_temp}°C/{int(cpu)}%").rjust(space_from_left),
         (f"{ram_used:.1f}/{ram_total:.1f}GB").rjust(space_from_left),
         (f"{nvme_usage:.1f}%").rjust(space_from_left),
@@ -158,16 +167,10 @@ def render(frame):
 
     frame.clear()
     lcd_image = Image.new("1", (frame.width, frame.height), 1)
-    draw = ImageDraw.Draw(lcd_image)
-    font = ImageFont.truetype("CozetteVector.ttf", 12, encoding="unic")
-    for i, line in enumerate(titles):
-        draw.text((0, i * 10), line, font=font, fill=0)
-    for i, line in enumerate(values):
-        draw.text((0, i * 10), line, font=font, fill=0)
 
+    #draw plots
     cpu_a += cpu/10
     cpu_temp_a += cpu_temp/10
-
     frames += 1
     if (frames%10)==0:
         hb_cpu_usage.add_sample(cpu_a)
@@ -175,22 +178,33 @@ def render(frame):
         cpu_a=0
         cpu_temp_a=0
         frames=0
-
     img_cpu_plot_img=render_plot(hb_cpu_usage, height=20)
     img_temp_plot_img=render_plot(hb_cpu_temperature, height=20)
-
     lcd_image.paste(img_cpu_plot_img, (128-48, 0))
     lcd_image.paste(img_temp_plot_img, (128-48, 30))
+
+    draw = ImageDraw.Draw(lcd_image)
+    font = ImageFont.truetype("CozetteVector.ttf", 12, encoding="unic")
+    for i, line in enumerate(titles):
+        draw.text((0, i * 10), line, font=font, fill=0)
+    for i, line in enumerate(values):
+        draw.text((0, i * 10), line, font=font, fill=0)
+
 
     frame.from_pil_image(lcd_image)
 
 def main():
+    global apc_monitor
     parser = argparse.ArgumentParser(description="Draw and stream a 128x64x1bpp framebuffer over serial.")
     parser.add_argument("--port", required=True, help="Serial port")
     args = parser.parse_args()
 
     frame = FrameBuffer()
     ser = open_serial(args.port, 115200)
+    
+    # Start APC Monitor
+    apc_monitor = APCMonitor(interval=10)
+    apc_monitor.start()
 
     def tick():
         nonlocal ser
@@ -219,6 +233,9 @@ def main():
 
     tick()
     stop.wait()
+    
+    # Clean up
+    apc_monitor.stop()
     ser.close()
 
 if __name__ == "__main__":

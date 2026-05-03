@@ -31,16 +31,30 @@ def _normalize_key(key: str) -> str:
 
 
 def run_upsc(device: str = "apcups@localhost", timeout: int = 10) -> str:
-    """Run `upsc <device>` and return its stdout output."""
-    result = subprocess.run(
-        ["upsc", device], capture_output=True, text=True, timeout=timeout
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        raise RuntimeError(
-            f"upsc failed for {device}: returncode={result.returncode}, stderr={stderr}"
+    """Run `upsc <device>` and return its stdout output.
+    
+    Raises:
+        RuntimeError: If upsc command fails or times out
+        FileNotFoundError: If upsc command is not installed
+    """
+    try:
+        result = subprocess.run(
+            ["upsc", device], capture_output=True, text=True, timeout=timeout
         )
-    return result.stdout
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            raise RuntimeError(
+                f"upsc failed for {device}: returncode={result.returncode}, stderr={stderr}"
+            )
+        return result.stdout
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"upsc command timed out after {timeout} seconds for device {device}"
+        )
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            "upsc command not found. Please install nut (Network UPS Tools)"
+        )
 
 
 class UPSC:
